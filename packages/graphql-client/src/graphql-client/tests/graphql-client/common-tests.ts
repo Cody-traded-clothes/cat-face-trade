@@ -1,3 +1,5 @@
+import fetchMock from "jest-fetch-mock";
+
 import { createGraphQLClient } from "../../graphql-client";
 import { GraphQLClient } from "../../types";
 
@@ -98,15 +100,25 @@ export const parametersTests = (
   });
 
   it("calls fetch API with provided headers override", async () => {
-    const headers = {
+    const arrayHeadersProp = "array-headers";
+    const arrayHeadersValue = ["1", "2", "3"];
+
+    const stringHeaders = {
       "Content-Type": "application/graphql",
       "custom-header": "custom-headers",
     };
 
-    await client[functionName](gqlOperation, { headers });
+    await client[functionName](gqlOperation, {
+      headers: { ...stringHeaders, [arrayHeadersProp]: arrayHeadersValue },
+    });
+
     expect(fetchMock).toHaveBeenCalledWith(clientConfig.url, {
       method: "POST",
-      headers: { ...clientConfig.headers, ...headers },
+      headers: {
+        ...clientConfig.headers,
+        ...stringHeaders,
+        [arrayHeadersProp]: arrayHeadersValue.join(", "),
+      },
       body: JSON.stringify({
         query: gqlOperation,
       }),

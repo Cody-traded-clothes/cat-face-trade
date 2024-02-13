@@ -188,6 +188,7 @@ function generateRequest(
 async function* getStreamBodyIterator(
   response: Response,
 ): AsyncIterableIterator<string> {
+  // Support node-fetch format
   if ((response.body as any)![Symbol.asyncIterator]) {
     for await (const chunk of response.body! as any) {
       yield (chunk as Buffer).toString();
