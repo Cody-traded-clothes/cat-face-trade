@@ -160,9 +160,15 @@ describe("GraphQL Client", () => {
             "Content-Type": "application/json",
           });
 
-          it("returns an async iterator that returns an object that includes the response data object", async () => {
+          it("returns an async iterator that returns an object that includes the response data object and extensions and has a false hasNext value", async () => {
             const mockResponseData = {
               data: { shop: { name: "Test shop" } },
+              extensions: {
+                context: {
+                  country: "JP",
+                  language: "ja",
+                },
+              },
             };
 
             const responseConfig = {
@@ -184,57 +190,10 @@ describe("GraphQL Client", () => {
 
             for await (const response of responseStream) {
               expect(response).toHaveProperty("data", mockResponseData.data);
-            }
-          });
-
-          it("returns an async iterator that returns an object that includes the response extensions object", async () => {
-            const extensions = {
-              context: {
-                country: "JP",
-                language: "ja",
-              },
-            };
-
-            const responseConfig = {
-              status: 200,
-              ok: true,
-              headers,
-            };
-
-            const mockedSuccessResponse = new Response(
-              JSON.stringify({ data: {}, extensions }),
-              responseConfig,
-            );
-
-            fetchMock.mockResolvedValue(mockedSuccessResponse);
-
-            const responseStream = await client.requestStream(operation, {
-              variables,
-            });
-
-            for await (const response of responseStream) {
-              expect(response).toHaveProperty("extensions", extensions);
-            }
-          });
-
-          it('returns an async iterator that returns an object that includes a "hasNext: false" field', async () => {
-            const responseConfig = {
-              status: 200,
-              ok: true,
-              headers,
-            };
-
-            const mockedSuccessResponse = new Response(
-              JSON.stringify({ data: {} }),
-              responseConfig,
-            );
-
-            fetchMock.mockResolvedValue(mockedSuccessResponse);
-
-            const responseStream = await client.requestStream(operation, {
-              variables,
-            });
-            for await (const response of responseStream) {
+              expect(response).toHaveProperty(
+                "extensions",
+                mockResponseData.extensions,
+              );
               expect(response).toHaveProperty("hasNext", false);
             }
           });
@@ -775,6 +734,7 @@ describe("GraphQL Client", () => {
                       /^GraphQL Client: Error in parsing multipart response - /,
                     ),
                   );
+                  expect(errors.response).toBe(mockedSuccessResponse);
 
                   expect(response.data).toBeUndefined();
                 });
