@@ -258,6 +258,166 @@ function readStreamChunk(
   };
 }
 
+function createJsonResponseAsyncIterator(response: Response) {
+  return {
+    async *[Symbol.asyncIterator]() {
+      const processedResponse = await processJSONResponse(response);
+
+      yield {
+        ...processedResponse,
+        hasNext: false,
+      };
+    },
+  };
+}
+
+function getResponseDataFromChunkBodies(chunkBodies: string[]) {
+  return chunkBodies
+    .map((value) => {
+      try {
+        return JSON.parse(value);
+      } catch (error) {
+        throw new Error(
+          `Error in parsing multipart response - ${getErrorMessage(error)}`,
+        );
+      }
+    })
+    .map((payload) => {
+      const { data, incremental, hasNext, extensions, errors } = payload;
+
+      // initial data chunk
+      if (!incremental) {
+        return {
+          data: data || {},
+          ...getKeyValueIfValid("errors", errors),
+          ...getKeyValueIfValid("extensions", extensions),
+          hasNext,
+        };
+      }
+
+      // subsequent data chunks
+      const incrementalArray: { data: any; errors?: any }[] = incremental.map(
+        ({ data, path, errors }: any) => {
+          return {
+            data: data && path ? buildDataObjectByPath(path, data) : {},
+            ...getKeyValueIfValid("errors", errors),
+          };
+        },
+      );
+
+      return {
+        data:
+          incrementalArray.length === 1
+            ? incrementalArray[0].data
+            : buildCombinedDataObject([
+                ...incrementalArray.map(({ data }) => data),
+              ]),
+        ...getKeyValueIfValid("errors", combineErrors(incrementalArray)),
+        hasNext,
+      };
+    });
+}
+
+function validateResponseData(
+  combinedData: ReturnType<typeof buildCombinedDataObject>,
+  responseErrors: any[],
+) {
+  if (responseErrors.length > 0) {
+    throw new Error(GQL_API_ERROR, {
+      cause: {
+        graphQLErrors: responseErrors,
+      },
+    });
+  }
+
+  if (Object.keys(combinedData).length === 0) {
+    throw new Error(NO_DATA_OR_ERRORS_ERROR);
+  }
+}
+
+function createMultipartResponseAsyncInterator(
+  response: Response,
+  responseContentType: string,
+) {
+  const boundaryHeader = (responseContentType ?? "").match(
+    BOUNDARY_HEADER_REGEX,
+  );
+  const boundary = `--${boundaryHeader ? boundaryHeader[1] : "-"}`;
+
+  if (
+    !response.body?.getReader &&
+    !(response.body as any)![Symbol.asyncIterator]
+  ) {
+    throw new Error("API multipart response did not return an iterable body", {
+      cause: response,
+    });
+  }
+
+  const streamBodyIterator = getStreamBodyIterator(response);
+
+  let combinedData: Record<string, any> = {};
+  let responseExtensions: Record<string, any> | undefined;
+
+  return {
+    async *[Symbol.asyncIterator]() {
+      try {
+        let streamHasNext = true;
+
+        for await (const chunkBodies of readStreamChunk(
+          streamBodyIterator,
+          boundary,
+        )) {
+          const responseData: {
+            data: any;
+            errors?: any;
+            extensions?: any;
+            hasNext: boolean;
+          }[] = getResponseDataFromChunkBodies(chunkBodies);
+
+          responseExtensions =
+            responseData.find((datum) => datum.extensions)?.extensions ??
+            responseExtensions;
+
+          const responseErrors = combineErrors(responseData);
+
+          combinedData = buildCombinedDataObject([
+            combinedData,
+            ...responseData.map(({ data }) => data),
+          ]);
+
+          streamHasNext = responseData.slice(-1)[0].hasNext;
+
+          validateResponseData(combinedData, responseErrors);
+
+          yield {
+            ...getKeyValueIfValid("data", combinedData),
+            ...getKeyValueIfValid("extensions", responseExtensions),
+            hasNext: streamHasNext,
+          };
+        }
+
+        if (streamHasNext) {
+          throw new Error(`Response stream terminated unexpectedly`);
+        }
+      } catch (error) {
+        const cause = getErrorCause(error);
+
+        yield {
+          ...getKeyValueIfValid("data", combinedData),
+          ...getKeyValueIfValid("extensions", responseExtensions),
+          errors: {
+            message: formatErrorMessage(getErrorMessage(error)),
+            networkStatusCode: response.status,
+            ...getKeyValueIfValid("graphQLErrors", cause?.graphQLErrors),
+            response,
+          },
+          hasNext: false,
+        };
+      }
+    },
+  };
+}
+
 function generateRequestStream(
   fetch: ReturnType<typeof generateFetch>,
 ): GraphQLClient["requestStream"] {
@@ -273,172 +433,28 @@ function generateRequestStream(
     try {
       const response = await fetch(...props);
 
-      const { status, statusText } = response;
+      const { statusText } = response;
 
       if (!response.ok) {
         throw new Error(statusText, { cause: response });
       }
 
       const responseContentType = response.headers.get("content-type") || "";
-      const isNotSupportedContentType = Object.values(CONTENT_TYPES).every(
-        (type) => !responseContentType.includes(type),
-      );
 
-      if (isNotSupportedContentType) {
-        throw new Error(
-          `${UNEXPECTED_CONTENT_TYPE_ERROR} ${responseContentType}`,
-          { cause: response },
-        );
+      switch (true) {
+        case responseContentType.includes(CONTENT_TYPES.json):
+          return createJsonResponseAsyncIterator(response);
+        case responseContentType.includes(CONTENT_TYPES.multipart):
+          return createMultipartResponseAsyncInterator(
+            response,
+            responseContentType,
+          );
+        default:
+          throw new Error(
+            `${UNEXPECTED_CONTENT_TYPE_ERROR} ${responseContentType}`,
+            { cause: response },
+          );
       }
-
-      if (responseContentType.includes(CONTENT_TYPES.json)) {
-        return {
-          async *[Symbol.asyncIterator]() {
-            const processedResponse = await processJSONResponse(response);
-
-            yield {
-              ...processedResponse,
-              hasNext: false,
-            };
-          },
-        };
-      }
-
-      const boundaryHeader = (responseContentType ?? "").match(
-        BOUNDARY_HEADER_REGEX,
-      );
-      const boundary = `--${boundaryHeader ? boundaryHeader[1] : "-"}`;
-
-      if (
-        !response.body?.getReader &&
-        !(response.body as any)![Symbol.asyncIterator]
-      ) {
-        throw new Error(
-          "API multipart response did not return an iterable body",
-          { cause: response },
-        );
-      }
-
-      const streamBodyIterator = getStreamBodyIterator(response);
-
-      let combinedData: Record<string, any> = {};
-      let responseExtensions: Record<string, any> | undefined;
-
-      return {
-        async *[Symbol.asyncIterator]() {
-          try {
-            let streamHasNext = true;
-
-            for await (const chunkBodies of readStreamChunk(
-              streamBodyIterator,
-              boundary,
-            )) {
-              const dataArray: {
-                data: any;
-                errors?: any;
-                extensions?: any;
-                hasNext: boolean;
-              }[] = chunkBodies
-                .map((value) => {
-                  try {
-                    return JSON.parse(value);
-                  } catch (error) {
-                    throw new Error(
-                      `Error in parsing multipart response - ${getErrorMessage(
-                        error,
-                      )}`,
-                    );
-                  }
-                })
-                .map((payload) => {
-                  const { data, incremental, hasNext, extensions, errors } =
-                    payload;
-
-                  if (!incremental) {
-                    return {
-                      data: data || {},
-                      ...getKeyValueIfValid("errors", errors),
-                      ...getKeyValueIfValid("extensions", extensions),
-                      hasNext,
-                    };
-                  }
-
-                  const incrementalArray: { data: any; errors?: any }[] =
-                    incremental.map(({ data, path, errors }: any) => {
-                      return {
-                        data:
-                          data && path ? buildDataObjectByPath(path, data) : {},
-                        ...getKeyValueIfValid("errors", errors),
-                      };
-                    });
-
-                  return {
-                    data:
-                      incrementalArray.length === 1
-                        ? incrementalArray[0].data
-                        : buildCombinedDataObject([
-                            ...incrementalArray.map(({ data }) => data),
-                          ]),
-                    ...getKeyValueIfValid(
-                      "errors",
-                      combineErrors(incrementalArray),
-                    ),
-                    hasNext,
-                  };
-                });
-
-              responseExtensions =
-                dataArray.find((datum) => datum.extensions)?.extensions ??
-                responseExtensions;
-
-              const responseErrors = combineErrors(dataArray);
-
-              combinedData = buildCombinedDataObject([
-                combinedData,
-                ...dataArray.map(({ data }) => data),
-              ]);
-
-              streamHasNext = dataArray.slice(-1)[0].hasNext;
-
-              if (responseErrors.length > 0) {
-                throw new Error(GQL_API_ERROR, {
-                  cause: {
-                    graphQLErrors: responseErrors,
-                  },
-                });
-              }
-
-              if (Object.keys(combinedData).length === 0) {
-                throw new Error(NO_DATA_OR_ERRORS_ERROR);
-              }
-
-              yield {
-                ...getKeyValueIfValid("data", combinedData),
-                ...getKeyValueIfValid("extensions", responseExtensions),
-                hasNext: streamHasNext,
-              };
-            }
-
-            if (streamHasNext) {
-              throw new Error(`Response stream terminated unexpectedly`);
-            }
-          } catch (error) {
-            const cause = getErrorCause(error);
-
-            yield {
-              ...getKeyValueIfValid("data", combinedData),
-              ...getKeyValueIfValid("extensions", responseExtensions),
-              errors: {
-                message: formatErrorMessage(getErrorMessage(error)),
-                networkStatusCode: status,
-                ...getKeyValueIfValid("graphQLErrors", cause?.graphQLErrors),
-                response,
-              },
-              hasNext: false,
-            };
-          }
-        },
-      };
     } catch (error) {
       return {
         async *[Symbol.asyncIterator]() {
