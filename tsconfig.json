@@ -1,48 +1,11 @@
 {
-  "compileOnSave": false,
-  "compilerOptions": {
-    "composite": true,
-    "declaration": true,
-    "declarationMap": true,
-    "pretty": true,
-    "moduleResolution": "node",
-    "target": "es5",
-    "downlevelIteration": true,
-    "esModuleInterop": true,
-    "sourceMap": true,
-    "noEmitOnError": false,
-    "experimentalDecorators": true,
-    "noUnusedParameters": true,
-    "noUnusedLocals": true,
-    "importHelpers": true,
-    "strictNullChecks": true,
-    "noImplicitAny": true,
-    "noImplicitThis": true,
-    "resolveJsonModule": true,
-    "skipLibCheck": true,
-    "lib": [
-      "dom",
-      "dom.iterable",
-      "es2015",
-      "es2016",
-      "es2017",
-      "es2018",
-      "es2019",
-      "es2020",
-      "esnext.asynciterable"
-    ],
-    "typeRoots": ["./node_modules/@types"],
-    "types": ["@cloudflare/workers-types", "node", "jest"],
-    "baseUrl": ".",
-    "rootDir": "."
-  },
-  "include": [
-    "lib/**/*.ts",
-    "adapters/**/*.ts",
-    "rest/**/*.ts",
-    "runtime/**/*.ts",
-  ],
-  "exclude": [
-    "**/*.test.ts", "**/test/*", "**/__tests__/*",
-  ],
+  "files": [],
+  "include": [],
+  "references": [
+    {"path": "./packages/admin-api-client"},
+    {"path": "./packages/api-codegen-preset"},
+    {"path": "./packages/graphql-client"},
+    {"path": "./packages/shopify-api"},
+    {"path": "./packages/storefront-api-client"},
+  ]
 }

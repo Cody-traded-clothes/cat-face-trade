@@ -12,4 +12,9 @@ bundle/
 *.d.ts.map
 *.js
 *.js.map
+*.mjs
+*.esnext
 *.tgz
+.vscode/
+.turbo
+**/build/
