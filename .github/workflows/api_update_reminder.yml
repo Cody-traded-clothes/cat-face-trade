@@ -14,3 +14,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           filename: .github/api_update_reminder.md
+            with:
+    subject-path: '<PATH TO ARTIFACT>'
+- uses: actions/attest-build-provenance@v1
